@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 class AverageMeter(object):
     """From https://github.com/pytorch/examples/blob/master/imagenet/main.py"""
 
@@ -20,3 +22,6 @@ class AverageMeter(object):
 class dotdict(dict):
     def __getattr__(self, name):
         return self[name]
+    
+    def __deepcopy__(self, memo):
+        return dotdict({k: deepcopy(v, memo) for k, v in self.items()})

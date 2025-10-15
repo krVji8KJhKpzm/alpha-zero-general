@@ -13,6 +13,10 @@ from MCTS import MCTS
 
 log = logging.getLogger(__name__)
 
+from Arena import Arena
+import numpy as np
+import copy, os, csv
+from othello.OthelloPlayers import RandomPlayer, GreedyOthelloPlayer, AlphaBetaOthelloPlayer
 
 class Coach():
     """
@@ -113,6 +117,9 @@ class Coach():
             self.nnet.train(trainExamples)
             nmcts = MCTS(self.game, self.nnet, self.args)
 
+            log.info('PITTING AGAINST BASELINES')
+            self._eval_vs_baselines(i)
+
             log.info('PITTING AGAINST PREVIOUS VERSION')
             arena = Arena(lambda x: np.argmax(pmcts.getActionProb(x, temp=0)),
                           lambda x: np.argmax(nmcts.getActionProb(x, temp=0)), self.game)
@@ -155,3 +162,53 @@ class Coach():
 
             # examples based on the model were already collected (loaded)
             self.skipFirstSelfPlay = True
+
+    def _mcts_player_with(self, nnet, sims):
+        eval_args = copy.deepcopy(self.args)
+        eval_args.numMCTSSims = sims
+        mcts = MCTS(self.game, nnet, eval_args)
+        return lambda board: np.argmax(mcts.getActionProb(board, temp=0))
+
+    def _eval_vs_baselines(self, iter_idx):
+        if getattr(self.args, 'evalGames', 0) <= 0:
+            return
+        nnet_player = self._mcts_player_with(self.nnet, getattr(self.args, 'evalNumMCTSSims', self.args.numMCTSSims))
+
+        rows = []
+
+        def eval_one(baseline_play, name):
+            arena = Arena(nnet_player, baseline_play, self.game)
+            w, l, d = arena.playGames(self.args.evalGames, verbose=False)
+            wr = w / max(1, (w + l))
+            print(f"[Iter {iter_idx}] vs {name}: W={w}, L={l}, D={d}, WR={wr:.3f}")
+            return name, w, l, d, wr
+
+        # random
+        if RandomPlayer is not None:
+            rp = RandomPlayer(self.game).play
+            rows.append(eval_one(rp, 'random'))
+        else:
+            rows.append(eval_one(self._generic_random_player(), 'random(generic)'))
+
+        # greedy
+        if GreedyOthelloPlayer is not None:
+            gp = GreedyOthelloPlayer(self.game).play
+            rows.append(eval_one(gp, 'greedy'))
+
+        # alphabeta
+        if AlphaBetaOthelloPlayer is not None:
+            abp = AlphaBetaOthelloPlayer(self.game, depth=self.args.evalABDepth,
+                                         time_limit=self.args.evalABTimeLimit).play
+            rows.append(eval_one(abp, f'alphabeta(d={self.args.evalABDepth})'))
+
+        if getattr(self.args, 'logBaselinesToCSV', False):
+            out_dir = os.path.join(self.args.checkpoint, 'metrics')
+            os.makedirs(out_dir, exist_ok=True)
+            csv_path = os.path.join(out_dir, 'baseline_eval.csv')
+            write_header = not os.path.exists(csv_path)
+            with open(csv_path, 'a', newline='') as f:
+                wtr = csv.writer(f)
+                if write_header:
+                    wtr.writerow(['iter', 'opponent', 'wins', 'losses', 'draws', 'win_rate'])
+                for name, w, l, d, wr in rows:
+                    wtr.writerow([iter_idx, name, w, l, d, f"{wr:.4f}"])

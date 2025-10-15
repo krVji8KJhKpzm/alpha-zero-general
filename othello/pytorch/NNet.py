@@ -18,8 +18,9 @@ args = dotdict({
     'lr': 0.001,
     'dropout': 0.3,
     'epochs': 10,
-    'batch_size': 64,
+    'batch_size': 256,
     'cuda': torch.cuda.is_available(),
+    'device': 1,
     'num_channels': 512,
 })
 
@@ -31,7 +32,7 @@ class NNetWrapper(NeuralNet):
         self.action_size = game.getActionSize()
 
         if args.cuda:
-            self.nnet.cuda()
+            self.nnet.cuda(args.device)
 
     def train(self, examples):
         """
@@ -57,7 +58,7 @@ class NNetWrapper(NeuralNet):
 
                 # predict
                 if args.cuda:
-                    boards, target_pis, target_vs = boards.contiguous().cuda(), target_pis.contiguous().cuda(), target_vs.contiguous().cuda()
+                    boards, target_pis, target_vs = boards.contiguous().cuda(args.device), target_pis.contiguous().cuda(args.device), target_vs.contiguous().cuda(args.device)
 
                 # compute output
                 out_pi, out_v = self.nnet(boards)
@@ -78,20 +79,36 @@ class NNetWrapper(NeuralNet):
     def predict(self, board):
         """
         board: np array with board
+        board shape: (n, n) (B, n, n) (1, 1, n, n) (B, 1, n, n)
         """
         # timing
         start = time.time()
 
         # preparing input
-        board = torch.FloatTensor(board.astype(np.float64))
-        if args.cuda: board = board.contiguous().cuda()
-        board = board.view(1, self.board_x, self.board_y)
+        board_np = np.array(board, dtype=np.float32)
         self.nnet.eval()
-        with torch.no_grad():
-            pi, v = self.nnet(board)
 
-        # print('PREDICTION TIME TAKEN : {0:03f}'.format(time.time()-start))
-        return torch.exp(pi).data.cpu().numpy()[0], v.data.cpu().numpy()[0]
+        if board_np.ndim == 2:
+            board_np = board_np[None, None, ...]
+        elif board_np.ndim == 3:
+            board_np = board_np[:, None, ...]
+        elif board_np.ndim == 4:
+            pass
+        else:
+            raise ValueError("Board has incorrect dimensions.")
+
+        with torch.no_grad():
+            x = torch.from_numpy(board_np).to(args.device)
+            pi_logits, v = self.nnet(x)
+            pi = torch.exp(pi_logits)
+        
+        pi = pi.cpu().numpy()
+        v = v.squeeze(-1).data.cpu().numpy()
+
+        if pi.shape[0] == 1:
+            return pi[0], float(v[0])
+        
+        return pi, v
 
     def loss_pi(self, targets, outputs):
         return -torch.sum(targets * outputs) / targets.size()[0]

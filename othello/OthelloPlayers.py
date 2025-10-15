@@ -156,3 +156,123 @@ class GTPOthelloPlayer():
 
     def __call__(self, game):
         return self.play(game)
+
+import numpy as np
+import time
+
+class AlphaBetaOthelloPlayer:
+    """
+    Negamax + Alpha-Beta for Othello under AlphaZeroGeneral's Game API.
+    Assumes the input board is canonical (player=+1 perspective), as Arena does.
+    """
+    def __init__(self, game, depth=3, time_limit=None):
+        self.game = game
+        self.depth = depth
+        self.time_limit = time_limit  # seconds; if None, pure depth search
+        self.n = getattr(game, 'n', game.getBoardSize()[0])
+
+        self.W = np.array([
+            [100, -20,  10,  5,  5, 10, -20, 100],
+            [-20, -50,  -2, -2, -2, -2, -50, -20],
+            [ 10,  -2,   2,  1,  1,  2,  -2,  10],
+            [  5,  -2,   1,  0,  0,  1,  -2,   5],
+            [  5,  -2,   1,  0,  0,  1,  -2,   5],
+            [ 10,  -2,   2,  1,  1,  2,  -2,  10],
+            [-20, -50,  -2, -2, -2, -2, -50, -20],
+            [100, -20,  10,  5,  5, 10, -20, 100],
+        ], dtype=np.float32)
+
+    def play(self, board):
+        start = time.time()
+        best_act = self._best_legal(board)
+        best_val = -float('inf')
+        max_depth = 20 if self.time_limit else self.depth
+
+        d = 1
+        while d <= max_depth:
+            val, act = self._negamax(board, d, -float('inf'), float('inf'), start)
+            if act is not None:
+                best_act, best_val = act, val
+            d += 1
+            if self.time_limit and (time.time() - start) >= self.time_limit:
+                break
+        return best_act
+
+    # ---------- core search ----------
+
+    def _negamax(self, board, depth, alpha, beta, start):
+        if self.time_limit and (time.time() - start) >= self.time_limit:
+            return self._eval(board), None
+
+        ge = self.game.getGameEnded(board, 1)
+        if ge != 0:
+            if abs(ge) < 1e-6:
+                return 0.0, None
+            return (1.0 if ge > 0 else -1.0), None
+
+        if depth == 0:
+            return self._eval(board), None
+
+        valids = self.game.getValidMoves(board, 1)
+        actions = np.where(valids == 1)[0]
+        if actions.size == 0:
+            return self._eval(board), None
+
+        scores = []
+        for a in actions:
+            flip_hint = self._flip_hint(board, a)
+            corner_bonus = self._corner_bonus(a)
+            scores.append((corner_bonus * 1000 + flip_hint, a))
+        actions = [a for _, a in sorted(scores, reverse=True)]
+
+        best_val, best_act = -float('inf'), actions[0]
+        for a in actions:
+            nb, np_player = self.game.getNextState(board, 1, a)
+            nb_canon = self.game.getCanonicalForm(nb, np_player)
+            v, _ = self._negamax(nb_canon, depth - 1, -beta, -alpha, start)
+            v = -v
+            if v > best_val:
+                best_val, best_act = v, a
+            alpha = max(alpha, v)
+            if alpha >= beta:
+                break
+        return best_val, best_act
+
+    # ---------- heuristics ----------
+
+    def _eval(self, board):
+        b = np.array(board)
+        n = self.n
+        material = b[:n, :n].sum() / (n * n)
+
+        my_moves = np.sum(self.game.getValidMoves(board, 1))
+        opp_board = self.game.getCanonicalForm(board, -1)
+        opp_moves = np.sum(self.game.getValidMoves(opp_board, 1))
+        mobility = 0 if (my_moves + opp_moves) == 0 else (my_moves - opp_moves) / (my_moves + opp_moves)
+
+        W = self.W[:n, :n]
+        positional = float((W * b[:n, :n]).sum()) / (np.abs(W).sum())
+
+        return 0.6 * positional + 0.3 * mobility + 0.1 * material
+
+    def _best_legal(self, board):
+        valids = self.game.getValidMoves(board, 1)
+        actions = np.where(valids == 1)[0]
+        if actions.size == 0:
+            return 0
+        actions_sorted = sorted(actions.tolist(), key=lambda a: self._corner_bonus(a), reverse=True)
+        return actions_sorted[0]
+
+    def _corner_bonus(self, a):
+        n = self.n
+        if a >= n * n:
+            return 0
+        r, c = divmod(a, n)
+        return 1 if (r, c) in [(0, 0), (0, n - 1), (n - 1, 0), (n - 1, n - 1)] else 0
+
+    def _flip_hint(self, board, a):
+        if a >= self.n * self.n:
+            return 0
+        nb, np_player = self.game.getNextState(board, 1, a)
+        b = np.array(self.game.getCanonicalForm(nb, np_player))
+        return int((b[:self.n, :self.n] > 0).sum())

@@ -34,8 +34,24 @@ class MCTS():
             probs: a policy vector where the probability of the ith action is
                    proportional to Nsa[(s,a)]**(1./temp)
         """
+
+        s0 = self.game.stringRepresentation(canonicalBoard)
         for i in range(self.args.numMCTSSims):
             self.search(canonicalBoard)
+
+            if i == 0:
+                P = self.Ps[s0].copy()
+                valids = self.Vs[s0]
+                mask = (valids > 0)
+                eps = 0.25
+                alpha = getattr(self.args, 'dirichletAlpha', 0.3)
+                eta = np.zeros_like(P)
+                m = int(mask.sum())
+                if m > 0:
+                    eta[mask] = np.random.dirichlet([alpha] * m)
+                    P = (1 - eps) * P + eps * eta
+                    P = P / P.sum()
+                    self.Ps[s0] = P
 
         s = self.game.stringRepresentation(canonicalBoard)
         counts = [self.Nsa[(s, a)] if (s, a) in self.Nsa else 0 for a in range(self.game.getActionSize())]
@@ -81,8 +97,33 @@ class MCTS():
             return -self.Es[s]
 
         if s not in self.Ps:
+            A = self.game.getActionSize()
+            dummy_pi = np.zeros(A, dtype = np.float32)
+            syms = self.game.getSymmetries(canonicalBoard, dummy_pi)
+            boards_sym = [b for (b, _) in syms]
+            K = len(boards_sym)
+
+            pis_sym, vs_sym = self.nnet.predict(np.stack(boards_sym, axis=0))  # pis_sym:(K,A), vs_sym:(K,)
+
+            pis_back = np.zeros((K, A), dtype=np.float32)
+            for i in range(K):
+                b_sym = boards_sym[i]
+                pi_sym = pis_sym[i]
+                back = self.game.getSymmetries(b_sym, pi_sym)
+                pi_i = None
+                for (b_j, pi_j) in back:
+                    if np.array_equal(b_j, canonicalBoard):
+                        pi_i = pi_j
+                        break
+                if pi_i is None:
+                    pi_i = pi_sym
+                pis_back[i] = pi_i
+
+            policy = pis_back.mean(axis=0)
+            v = vs_sym.mean()
+            self.Ps[s] = policy
+
             # leaf node
-            self.Ps[s], v = self.nnet.predict(canonicalBoard)
             valids = self.game.getValidMoves(canonicalBoard, 1)
             self.Ps[s] = self.Ps[s] * valids  # masking invalid moves
             sum_Ps_s = np.sum(self.Ps[s])
@@ -134,3 +175,10 @@ class MCTS():
 
         self.Ns[s] += 1
         return -v
+
+    def _evaluate_leaf(self, s):
+        if s in self.Ps:
+            return
+        
+        n = self.game.n
+        
