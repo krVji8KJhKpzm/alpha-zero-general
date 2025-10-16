@@ -11,3 +11,7 @@ checkpoints/
 # For PyCharm users
 .idea/
 
+*.log
+*.pid
+/real_alphaGoZero/
+/diy/

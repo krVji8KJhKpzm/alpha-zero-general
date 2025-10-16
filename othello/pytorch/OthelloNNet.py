@@ -37,18 +37,38 @@ class OthelloNNet(nn.Module):
         self.fc4 = nn.Linear(512, 1)
 
     def forward(self, s):
-        #                                                           s: batch_size x board_x x board_y
-        s = s.view(-1, 1, self.board_x, self.board_y)                # batch_size x 1 x board_x x board_y
-        s = F.relu(self.bn1(self.conv1(s)))                          # batch_size x num_channels x board_x x board_y
-        s = F.relu(self.bn2(self.conv2(s)))                          # batch_size x num_channels x board_x x board_y
-        s = F.relu(self.bn3(self.conv3(s)))                          # batch_size x num_channels x (board_x-2) x (board_y-2)
-        s = F.relu(self.bn4(self.conv4(s)))                          # batch_size x num_channels x (board_x-4) x (board_y-4)
-        s = s.view(-1, self.args.num_channels*(self.board_x-4)*(self.board_y-4))
+        if s.dim() == 3:
+            B, H, W = s.shape
+            S = None
+            s_merged = s
+        elif s.dim() == 4:
+            B, S, H, W = s.shape
+            s_merged = s.reshape(B*S, H, W)
+        else:
+            raise ValueError(f"Expect (B,H,W) or (B,S,H,W), got {tuple(s.shape)}")
 
-        s = F.dropout(F.relu(self.fc_bn1(self.fc1(s))), p=self.args.dropout, training=self.training)  # batch_size x 1024
-        s = F.dropout(F.relu(self.fc_bn2(self.fc2(s))), p=self.args.dropout, training=self.training)  # batch_size x 512
+        x = s_merged.view(-1, 1, self.board_x, self.board_y)                 # (B[*S], 1, H, W)
+        x = F.relu(self.bn1(self.conv1(x)))                                  # (B[*S], C, H, W)
+        x = F.relu(self.bn2(self.conv2(x)))                                  # (B[*S], C, H, W)
+        x = F.relu(self.bn3(self.conv3(x)))                                  # (B[*S], C, H-2, W-2)
+        x = F.relu(self.bn4(self.conv4(x)))                                  # (B[*S], C, H-4, W-4)
 
-        pi = self.fc3(s)                                                                         # batch_size x action_size
-        v = self.fc4(s)                                                                          # batch_size x 1
+        z = x.view(-1, self.args.num_channels*(self.board_x-4)*(self.board_y-4))  # (B[*S], hidden)
 
-        return F.log_softmax(pi, dim=1), torch.tanh(v)
+        h = F.dropout(F.relu(self.fc_bn1(self.fc1(z))), p=self.args.dropout, training=self.training)
+        h = F.dropout(F.relu(self.fc_bn2(self.fc2(h))), p=self.args.dropout, training=self.training)
+
+        pi = self.fc3(h)                     # (B[*S], action_size)
+        v  = self.fc4(h)                     # (B[*S], 1)
+
+        pi = F.log_softmax(pi, dim=1)
+        v  = torch.tanh(v)
+
+        if s.dim() == 4:
+            pi = pi.view(B, S, -1)           # (B, 8, action_size) -> 8×65
+            v  = v.view(B, S, 1)             # (B, 8, 1)
+            z  = z.view(B, S, -1)            # (B, 8, hidden)
+
+            return pi[:, -1, :], pi, v[:, -1, :], v, z
+        else:
+            return pi, None, v, None, None

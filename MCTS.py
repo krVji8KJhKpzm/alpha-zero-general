@@ -97,33 +97,34 @@ class MCTS():
             return -self.Es[s]
 
         if s not in self.Ps:
-            A = self.game.getActionSize()
-            dummy_pi = np.zeros(A, dtype = np.float32)
-            syms = self.game.getSymmetries(canonicalBoard, dummy_pi)
-            boards_sym = [b for (b, _) in syms]
-            K = len(boards_sym)
+            # A = self.game.getActionSize()
+            # dummy_pi = np.zeros(A, dtype = np.float32)
+            # syms = self.game.getSymmetries(canonicalBoard, dummy_pi)
+            # boards_sym = [b for (b, _) in syms]
+            # K = len(boards_sym)
 
-            pis_sym, vs_sym = self.nnet.predict(np.stack(boards_sym, axis=0))  # pis_sym:(K,A), vs_sym:(K,)
+            # pis_sym, vs_sym = self.nnet.predict(np.stack(boards_sym, axis=0))  # pis_sym:(K,A), vs_sym:(K,)
 
-            pis_back = np.zeros((K, A), dtype=np.float32)
-            for i in range(K):
-                b_sym = boards_sym[i]
-                pi_sym = pis_sym[i]
-                back = self.game.getSymmetries(b_sym, pi_sym)
-                pi_i = None
-                for (b_j, pi_j) in back:
-                    if np.array_equal(b_j, canonicalBoard):
-                        pi_i = pi_j
-                        break
-                if pi_i is None:
-                    pi_i = pi_sym
-                pis_back[i] = pi_i
+            # pis_back = np.zeros((K, A), dtype=np.float32)
+            # for i in range(K):
+            #     b_sym = boards_sym[i]
+            #     pi_sym = pis_sym[i]
+            #     back = self.game.getSymmetries(b_sym, pi_sym)
+            #     pi_i = None
+            #     for (b_j, pi_j) in back:
+            #         if np.array_equal(b_j, canonicalBoard):
+            #             pi_i = pi_j
+            #             break
+            #     if pi_i is None:
+            #         pi_i = pi_sym
+            #     pis_back[i] = pi_i
 
-            policy = pis_back.mean(axis=0)
-            v = vs_sym.mean()
-            self.Ps[s] = policy
+            # policy = pis_back.mean(axis=0)
+            # v = vs_sym.mean()
+            # self.Ps[s] = policy
 
             # leaf node
+            self.Ps[s], v = self.nnet.predict(canonicalBoard)
             valids = self.game.getValidMoves(canonicalBoard, 1)
             self.Ps[s] = self.Ps[s] * valids  # masking invalid moves
             sum_Ps_s = np.sum(self.Ps[s])
@@ -175,10 +176,3 @@ class MCTS():
 
         self.Ns[s] += 1
         return -v
-
-    def _evaluate_leaf(self, s):
-        if s in self.Ps:
-            return
-        
-        n = self.game.n
-        

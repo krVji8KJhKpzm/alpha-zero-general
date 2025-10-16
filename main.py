@@ -1,5 +1,6 @@
 import logging
-
+import os, random, torch
+import numpy as np
 import coloredlogs
 
 from Coach import Coach
@@ -11,6 +12,17 @@ log = logging.getLogger(__name__)
 
 coloredlogs.install(level='INFO')  # Change this to DEBUG to see more info.
 
+def set_seed(seed: int):
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    
+    log.info('Seed set to %s...', seed)
+
 args = dotdict({
     'numIters': 100,
     'numEps': 100,              # Number of complete self-play games to simulate during a new iteration.
@@ -21,14 +33,19 @@ args = dotdict({
     'arenaCompare': 40,         # Number of games to play during arena play to determine if new net will be accepted.
     'cpuct': 1,
 
-    'checkpoint': './real_alhpaGoZero/',
+    'checkpoint': './diy/',
+    # 'checkpoint': 'real_alphaGoZero',
     'load_model': False,
     'load_folder_file': ('/dev/models/8x100x50','best.pth.tar'),
     'numItersForTrainExamplesHistory': 20,
 
     'dirichletAlpha': 0.3,
 
-    'evalGames': 20,
+    'eliteCapacity': 5000,
+    'eliteWindow': 200,
+    'eliteFrac': 0.1,
+
+    'evalGames': 40,
     'evalNumMCTSSims': 25,
     'logBaselinesToCSV': True,
 
@@ -38,6 +55,7 @@ args = dotdict({
 
 
 def main():
+    set_seed(42)
     log.info('Loading %s...', Game.__name__)
     g = Game(8)
 
